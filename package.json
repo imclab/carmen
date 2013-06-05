@@ -11,14 +11,14 @@
     "licenses": [{ "type": "BSD" }],
     "dependencies": {
         "underscore": "1.3.x",
-        "express": "~2.5.x",
+        "express": "~3.2.6",
         "step": "0.0.x",
         "iconv": "2.0.x",
         "sphericalmercator": "~1.0.1"
     },
     "devDependencies": {
-        "mbtiles": "~0.2.x",
-        "tilelive-s3": "0.5.x"
+        "mbtiles": "https://github.com/mapbox/node-mbtiles/tarball/node-v0.10.x",
+        "tilelive-s3": "https://github.com/mapbox/tilelive-s3/tarball/node-v0.10.x"
     },
     "main": "./index.js",
     "scripts": {
