@@ -40,9 +40,10 @@ carmen._open(function(err) {
                     if (err) throw err;
                     console.log('Done.');
                 });
-                console.log('Indexing %s docs ...', docs.length);
+                var start = +new Date;
                 carmen.index(from, docs, function(err) {
                     if (err) throw err;
+                    console.log('Indexed %s docs @ %s/s', docs.length, Math.floor(docs.length * 1000 / (+new Date - start)));
                     index(pointer);
                 });
             });
