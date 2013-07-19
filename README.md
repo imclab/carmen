@@ -4,9 +4,14 @@ UTFGrid/MBTiles-based geocoder with support for swappable data sources.
 
 ## Depends
 
- - Node v0.8.x
+ - Node v0.8.x or Node v0.10.x
  - sqlite3 command line program (`apt-get install sqlite3`)
  - node-gyp >= v0.10.4 (`npm install node-gyp@latest -g`)
+ - boost: libboost-locale-dev libboost-dev, libboost-regex-dev, libboost-thread-dev
+ - libicu-dev
+ - g++ compiler >= 4.7.x (available on >= Ubuntu raring)
+   - 4.6.x works (what Ubuntu precise has) but you will need to edit
+     the binding gyp and replace `-std=c++11` with `-std=c++0x`
 
 ## Install
 

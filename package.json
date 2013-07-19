@@ -17,7 +17,7 @@
     },
     "devDependencies": {
         "mbtiles": "~0.3.2",
-        "tilelive-s3": "0.5.x"
+        "tilelive-s3": "https://github.com/mapbox/tilelive-s3/tarball/node-v0.10.x"
     },
     "main": "./index.js",
     "scripts": {

@@ -599,13 +599,16 @@ Carmen.prototype.index = function(source, docs, callback) {
                 case 'term':
                     // This merges new entries on top of old ones.
                     // @TODO invalidate old entries in a separate command/op.
-                    _(data).each(function(val, key) {
+                    for (var key in data) {
                         current[key] = current[key] || [];
-                        current[key] = _(current[key].concat(val)).uniq();
-                    });
+                        for (var i = 0; i < data[key].length; i++) {
+                            if (current[key].indexOf(data[key][i]) >= 0) continue;
+                            current[key].push(data[key][i]);
+                        }
+                    }
                     break;
                 case 'grid':
-                    _(data).each(function(val, key) { current[key] = val });
+                    for (var key in data) current[key] = data[key];
                     break;
                 }
                 source.putCarmen(type, shard, current, done);
