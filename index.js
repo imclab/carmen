@@ -63,7 +63,7 @@ function Carmen(options) {
         source = source.source ? source.source : source;
 
         memo[key] = source;
-        source._carmen = source._carmen || { term: {}, grid: {}, cache: {} };
+        source._carmen = source._carmen || { freq:{}, term: {}, grid: {}, cache: {} };
         if (source.open) {
             source.getInfo(function(err, info) {
                 if (err) return done(err);
@@ -454,7 +454,6 @@ Carmen.prototype.search = function(source, query, id, callback) {
             if (!approxdocs) approxdocs = Object.keys(data).length * Math.pow(16, shardlevel);
 
             result = result.concat(data[term]);
-            freqs[term] = data[term] ? Math.log(approxdocs / data[term].length) : 0;
             getids(queue, result, callback);
         });
     };
@@ -468,7 +467,6 @@ Carmen.prototype.search = function(source, query, id, callback) {
         source.getCarmen('grid', shard, function(err, data) {
             if (err) return callback(err);
             if (!data[id]) return getzxy(queue, result, callback);
-
             termfreq(Array.prototype.concat.apply([], data[id].text), function(err) {
                 if (err) return callback(err);
 
@@ -537,9 +535,9 @@ Carmen.prototype.search = function(source, query, id, callback) {
 
         // Look up term frequency.
         var shard = Carmen.shard(shardlevel, term);
-        source.getCarmen('term', shard, function(err, data) {
+        source.getCarmen('freq', shard, function(err, data) {
             if (err) return callback(err);
-            freqs[term] = Math.log(approxdocs / data[term].length);
+            freqs[term] = Math.log(approxdocs / data[term]);
             return termfreq(terms, callback);
         });
     };
@@ -558,63 +556,177 @@ Carmen.prototype.index = function(source, docs, callback) {
     }.bind(this));
 
     var shardlevel = source._carmen.shardlevel;
-    var remaining = docs.length;
-    var patch = { term: {}, grid: {} };
-    var done = function(err) {
-        if (err) {
-            remaining = -1;
-            callback(err);
-        } else if (!--remaining) {
-            callback(null);
-        }
-    };
-    docs.forEach(function(doc) {
-        var docid = parseInt(doc.id,10);
-        Carmen.terms(doc.text).reduce(function(memo, id) {
-            var shard = Carmen.shard(shardlevel, id);
-            memo[shard] = memo[shard] || {};
-            memo[shard][id] = memo[shard][id] || [];
-            memo[shard][id].push(docid);
-            return memo;
-        }, patch.term);
-        var shard = Carmen.shard(shardlevel, docid);
-        patch.grid[shard] = patch.grid[shard] || {};
-        patch.grid[shard][docid] = {
-            text: doc.text.split(',').map(Carmen.terms),
-            zxy: doc.zxy.map(Carmen.zxy)
-        };
-    });
-    // Number of term shards.
-    remaining += Object.keys(patch.term).length;
-    // Number of grid shards.
-    remaining += Object.keys(patch.grid).length;
-    // Add each doc.
-    docs.forEach(function(doc) {
-        source.putFeature(typeof doc.id === 'number' ? doc.id.toFixed(0) : doc.id, doc.doc, done);
-    });
-    _(patch).each(function(shards, type) {
-        _(shards).each(function(data, shard) {
-            source.getCarmen(type, shard, function(err, current) {
-                switch (type) {
-                case 'term':
-                    // This merges new entries on top of old ones.
-                    // @TODO invalidate old entries in a separate command/op.
-                    for (var key in data) {
-                        current[key] = current[key] || [];
-                        for (var i = 0; i < data[key].length; i++) {
-                            if (current[key].indexOf(data[key][i]) >= 0) continue;
-                            current[key].push(data[key][i]);
-                        }
-                    }
-                    break;
-                case 'grid':
-                    for (var key in data) current[key] = data[key];
-                    break;
-                }
-                source.putCarmen(type, shard, current, done);
-            });
+
+    indexFreqs(function(err, freq) {
+        if (err) return callback(err);
+        source.getCarmen('freq', 0, function(err, data) {
+            if (err) return callback(err);
+            // @TODO fix this approxdoc calc.
+            var approxdocs = Object.keys(data).length * Math.pow(16, shardlevel);
+            approxdocs = approxdocs || Object.keys(freq).length;
+            indexDocs(approxdocs, freq, callback);
         });
     });
+
+    // First pass over docs.
+    // - Creates termsets (one or more arrays of termids) from document text.
+    // - Tallies frequency of termids against current frequencies compiling a
+    //   final in-memory frequency count of all terms involved with this set of
+    //   documents to be indexed.
+    // - Stores new frequencies.
+    function indexFreqs(callback) {
+        var remaining = 0;
+        var freq = {};
+        var done = function(err) {
+            if (err) {
+                remaining = -1;
+                callback(err);
+            } else if (!--remaining) {
+                callback(null, freq);
+            }
+        };
+        for (var i = 0; i < docs.length; i++) {
+            var doc = docs[i];
+            var termsets = doc.text.split(',').map(Carmen.terms);
+            for (var j = 0; j < termsets.length; j++) {
+                var terms = termsets[j];
+                for (var k = 0; k < terms.length; k++) {
+                    var id = terms[k];
+                    var shard = Carmen.shard(shardlevel, id);
+                    freq[shard] = freq[shard] || {};
+                    freq[shard][id] = freq[shard][id] || 0;
+                    freq[shard][id]++;
+                }
+            }
+            doc.termsets = termsets;
+        }
+        remaining += Object.keys(freq).length;
+        _(freq).each(function(data, shard) {
+            source.getCarmen('freq', shard, function(err, current) {
+                for (var key in data) {
+                    current[key] = (current[key]||0) + data[key];
+                    data[key] = current[key];
+                }
+                source.putCarmen('freq', shard, current, done);
+            });
+        });
+    };
+
+    // Second pass over docs.
+    // - Create term => docid index. Uses calculated frequencies to index only
+    //   significant terms for each document.
+    // - Create id => grid zxy index.
+    function indexDocs(approxdocs, freq, callback) {
+        var remaining = docs.length;
+        var patch = { term: {}, grid: {} };
+        var done = function(err) {
+            if (err) {
+                remaining = -1;
+                callback(err);
+            } else if (!--remaining) {
+                callback(null);
+            }
+        };
+        docs.forEach(function(doc) {
+            var docid = parseInt(doc.id,10);
+            var termsets = doc.termsets;
+            termsets.forEach(function(terms, x) {
+                var weights = {};
+                var total = 0;
+
+                for (var i = 0; i < terms.length; i++) {
+                    var id = terms[i];
+                    var shard = Carmen.shard(shardlevel, id);
+                    weights[id] = Math.log(approxdocs/freq[shard][id]);
+                    total += weights[id];
+                }
+
+                // This threshold defines broadly how significant a term
+                // must be within the context of a document to be indexed.
+                // Indexing of only significant terms is an optimization meant
+                // to reduce the burden of indexing high cardinality terms
+                // (e.g. road, lane, way, etc.) when they are insignificant
+                // within the context of a document.
+                //
+                // *Intended* to preserve indexing of high cardinality terms
+                // when they are of relative importance within a document
+                // context, e.g. alley from "alley street".
+                //
+                // Examples:
+                //
+                // kalorama road
+                // - since this document has 2 terms, a significant term is
+                //   as one with weight >= 0.25 (1/2/2 = 0.25).
+                //
+                // united states of america
+                // - since this document has 4 terms, a significant term is
+                //   as one with weight >= 0.125 (1/4/2 = 0.125).
+                var threshold = 1 / terms.length / 2;
+
+                var sigterms = [];
+                for (var i = 0; i < terms.length; i++) {
+                    var id = terms[i];
+                    if ((weights[id]/total) >= threshold) sigterms.push(id);
+                }
+
+                // Debug significant term selection.
+                // var debug = Carmen.termsDebug(doc.text.split(',')[x]);
+                // var oldtext = terms.map(function(id) { return debug[id]; }).join(' ');
+                // var sigtext = sigterms.map(function(id) { return debug[id]; }).join(' ');
+                // if (oldtext !== sigtext)  console.log('%s => %s', oldtext, sigtext);
+
+                for (var i = 0; i < sigterms.length; i++) {
+                    var id = sigterms[i];
+                    var shard = Carmen.shard(shardlevel, id);
+                    patch.term[shard] = patch.term[shard] || {};
+                    patch.term[shard][id] = patch.term[shard][id] || [];
+                    patch.term[shard][id].push(docid);
+                }
+            });
+
+            if (doc.zxy) {
+                var shard = Carmen.shard(shardlevel, docid);
+                patch.grid[shard] = patch.grid[shard] || {};
+                patch.grid[shard][docid] = {
+                    text: doc.termsets,
+                    zxy: doc.zxy.map(Carmen.zxy)
+                };
+            }
+        });
+
+        // Number of term shards.
+        remaining += Object.keys(patch.term).length;
+        // Number of grid shards.
+        remaining += Object.keys(patch.grid).length;
+        // Add each doc.
+        docs.forEach(function(doc) {
+            source.putFeature(typeof doc.id === 'number' ? doc.id.toFixed(0) : doc.id, doc.doc, done);
+        });
+        _(patch).each(function(shards, type) {
+            _(shards).each(function(data, shard) {
+                source.getCarmen(type, shard, function(err, current) {
+                    // This merges new entries on top of old ones.
+                    switch (type) {
+                    case 'term':
+                        for (var key in data) {
+                            current[key] = current[key] || [];
+                            for (var i = 0; i < data[key].length; i++) {
+                                if (current[key].indexOf(data[key][i]) >= 0) continue;
+                                current[key].push(data[key][i]);
+                            }
+                        }
+                        // Update approx doc count.
+                        source._carmen.approxdocs = Math.max(approxdocs, Object.keys(current).length * Math.pow(16, shardlevel));
+                        break;
+                    case 'grid':
+                        for (var key in data) current[key] = data[key];
+                        break;
+                    }
+                    source.putCarmen(type, shard, current, done);
+                });
+            });
+        });
+    };
 };
 
 Carmen.tokenize = function(query, lonlat) {
@@ -648,6 +760,14 @@ Carmen.terms = function(text) {
         return parseInt(crypto.createHash('md5').update(w).digest('hex').substr(0,8), 16);
     });
     return _(terms).uniq();
+};
+
+// Create a debug hash for term IDs.
+Carmen.termsDebug = function(text) {
+    return Carmen.tokenize(text).reduce(function(memo, w) {
+        memo[parseInt(crypto.createHash('md5').update(w).digest('hex').substr(0,8), 16)] = w;
+        return memo;
+    }, {});
 };
 
 // Assumes an integer space of Math.pow(16,8);

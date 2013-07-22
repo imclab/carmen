@@ -39,11 +39,12 @@ carmen._open(function(err) {
                 if (!docs.length) return to.stopWriting(function(err) {
                     if (err) throw err;
                     console.log('Done.');
+                    process.exit(0);
                 });
                 var start = +new Date;
                 carmen.index(to, docs, function(err) {
                     if (err) throw err;
-                    console.log('Indexed %s docs @ %s/s', docs.length, Math.floor(docs.length / (+new Date - start)));
+                    console.log('Indexed %s docs @ %s/s', docs.length, Math.floor(docs.length * 1000 / (+new Date - start)));
                     index(pointer);
                 });
             });
