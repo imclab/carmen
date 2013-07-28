@@ -31,36 +31,15 @@ MBTiles.prototype.putFeature = function(id, data, callback) {
 };
 
 // Implements carmen#getCarmen method.
-var defer = typeof setImmediate === 'undefined' ? process.nextTick : setImmediate;
 MBTiles.prototype.getCarmen = function(type, shard, callback) {
-    if (!this._carmen) this._carmen = { freq: {}, term: {}, grid: {} };
-
-    var shards = this._carmen[type];
-    if (shards[shard]) return defer(function() {
-        callback(null, shards[shard]);
-    });
-
     return this._db.get('SELECT data FROM carmen_' + type + ' WHERE shard = ?', shard, function(err, row) {
-        if (err) return callback(err);
-        shards[shard] = row ? JSON.parse(row.data) : {};
-        callback(null, shards[shard]);
+        callback(err, row ? row.data : null);
     });
 };
 
 // Implements carmen#putCarmen method.
 MBTiles.prototype.putCarmen = function(type, shard, data, callback) {
-    if (!this._carmen) this._carmen = { freq: {}, term: {}, grid: {} };
-
-    var shards = this._carmen[type];
-
-    this.write('carmen_' + type, shard, {
-        shard: shard,
-        data: JSON.stringify(data)
-    }, function(err) {
-        if (err) return callback(err);
-        shards[shard] = data;
-        callback(null);
-    });
+    this.write('carmen_' + type, shard, { shard: shard, data: data }, callback);
 };
 
 // Implements carmen#indexable method.
@@ -122,6 +101,7 @@ MBTiles.prototype.startWriting = _(MBTiles.prototype.startWriting).wrap(function
         if (err) return callback(err);
         var sql = '\
         CREATE INDEX IF NOT EXISTS map_grid_id ON map (grid_id);\
+        CREATE TABLE IF NOT EXISTS carmen_docs(shard INTEGER PRIMARY KEY, data BLOB);\
         CREATE TABLE IF NOT EXISTS carmen_freq(shard INTEGER PRIMARY KEY, data BLOB);\
         CREATE TABLE IF NOT EXISTS carmen_term(shard INTEGER PRIMARY KEY, data BLOB);\
         CREATE TABLE IF NOT EXISTS carmen_grid(shard INTEGER PRIMARY KEY, data BLOB);';

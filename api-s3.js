@@ -79,12 +79,6 @@ S3.prototype.getCarmen = function(type, shard, callback) {
     try { var uri = url.parse(this.data._carmen); }
     catch (err) { return callback(new Error('Carmen not supported')); }
 
-    // Init carmen cache.
-    this._carmen = this._carmen || { term: {}, grid: {} };
-
-    // Cache hit.
-    if (this._carmen[type][shard]) return callback(null, this._carmen[type][shard]);
-
     uri.pathname = path.join(uri.pathname, type + '/' + shard + '.json');
     new S3.get({
         uri: url.format(uri),
@@ -92,10 +86,8 @@ S3.prototype.getCarmen = function(type, shard, callback) {
         agent: S3.agent,
         timeout: 5000
     }).asBuffer(function(err, buffer) {
-        if (err && err.status > 499) return callback(err);
-        this._carmen[type][shard] = buffer ? JSON.parse(buffer.toString('utf8')) : {};
-        callback(null, this._carmen[type][shard]);
-    }.bind(this));
+        callback(err && err.status > 499 ? err : null, buffer);
+    });
 };
 
 // Implements carmen#putCarmen method.
@@ -106,15 +98,8 @@ S3.prototype.putCarmen = function(type, shard, data, callback) {
     try { var uri = url.parse(this.data._carmen); }
     catch (err) { return callback(new Error('Carmen not supported')); }
 
-    // Init carmen cache.
-    this._carmen = this._carmen || { term: {}, grid: {} };
-
     uri.pathname = path.join(uri.pathname, type + '/' + shard + '.json');
-    put(this.client, uri.pathname, JSON.stringify(data), function(err) {
-        if (err) return callback(err);
-        this._carmen[type][shard] = data;
-        callback(null);
-    }.bind(this));
+    put(this.client, uri.pathname, data, callback);
 };
 
 // Implements carmen#indexable method.

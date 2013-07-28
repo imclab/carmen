@@ -39,11 +39,19 @@ carmen._open(function(err) {
         var index = function(pointer) {
             from.indexable(pointer, function(err, docs, pointer) {
                 if (err) throw err;
-                if (!docs.length) return from.stopWriting(function(err) {
-                    if (err) throw err;
-                    console.log('Done.');
-                    process.exit(0);
-                });
+                if (!docs.length) {
+                    var start = +new Date;
+                    console.log('Storing docs...');
+                    return carmen.store(from, function(err) {
+                        console.log('Stored in %ss', Math.floor((+new Date-start) * 0.001));
+                        if (err) throw err;
+                        from.stopWriting(function(err) {
+                            if (err) throw err;
+                            console.log('Done.');
+                            process.exit(0);
+                        });
+                    });
+                }
                 var start = +new Date;
                 carmen.index(from, docs, function(err) {
                     if (err) throw err;
