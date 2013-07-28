@@ -670,6 +670,7 @@ Carmen.prototype.index = function(source, docs, callback) {
                     var shard = Carmen.shard(shardlevel, id);
                     patch.term[shard] = patch.term[shard] || {};
                     patch.term[shard][id] = patch.term[shard][id] || [];
+                    if (patch.term[shard][id].indexOf(docid) !== -1) continue;
                     patch.term[shard][id].push(docid);
                 }
             });
@@ -740,7 +741,7 @@ Carmen.prototype.store = function(source, callback) {
         var data = source._carmen[type][shard];
         Carmen.put(source, type, shard, data, function(err) {
             if (err) return callback(err);
-            write();
+            defer(function() { write(); });
         });
     };
     write();
