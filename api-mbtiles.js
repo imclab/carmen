@@ -49,6 +49,15 @@ MBTiles.prototype.indexable = function(pointer, callback) {
     pointer.offset = pointer.offset || 0;
     pointer.nogrids = 'nogrids' in pointer ? pointer.nogrids : false;
 
+    // Converts MBTiles native TMS coords to ZXY.
+    function tms2zxy(zxys) {
+        return zxys.split(',').map(function(tms) {
+            var zxy = tms.split('/').map(function(v) { return parseInt(v,10) });
+            zxy[2] = (1 << zxy[0]) - 1 - zxy[2];
+            return zxy.join('/');
+        });
+    };
+
     // If 'carmen' option is passed in initial pointer, retrieve indexables from
     // carmen table. This option can be used to access the previously indexed
     // documents from an MBTiles database without having to know what search
@@ -60,7 +69,7 @@ MBTiles.prototype.indexable = function(pointer, callback) {
             doc.id = row.id;
             doc.doc = JSON.parse(row.key_json);
             doc.text = row.text;
-            doc.zxy = row.zxy.split(',');
+            if (row.zxy) doc.zxy = tms2zxy(row.zxy);
             return doc;
         });
         pointer.offset += pointer.limit;
@@ -86,7 +95,7 @@ MBTiles.prototype.indexable = function(pointer, callback) {
                 // @TODO the doc field name for searching probably (?) belongs
                 // in `metadata` and should be un-hardcoded in the future.
                 doc.text = doc.doc.search || doc.doc.name || '';
-                if (row.zxy) doc.zxy = row.zxy.split(',');
+                if (row.zxy) doc.zxy = tms2zxy(row.zxy);
                 return doc;
             });
             pointer.offset += pointer.limit;
