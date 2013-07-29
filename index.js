@@ -6,16 +6,6 @@ var crypto = require('crypto');
 var iconv = new require('iconv').Iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE');
 var EventEmitter = require('events').EventEmitter;
 
-// For a given z,x,y find its parent tile.
-function pyramid(zxy, parent) {
-    var z = (zxy / 1e14) | 0;
-    var x = ((zxy % 1e14) / 1e7) | 0;
-    var y = zxy % 1e7;
-    var depth = Math.max(z - parent, 0);
-    var side = Math.pow(2, depth);
-    return ((z - depth) * 1e14) + (Math.floor(x/side) * 1e7) + Math.floor(y/side);
-};
-
 // Resolve the UTF-8 encoding stored in grids to simple number values.
 function resolveCode(key) {
     if (key >= 93) key--;
@@ -247,36 +237,35 @@ Carmen.prototype.geocode = function(query, callback) {
 
     function score(rows, zooms, callback) {
         var features = {};
+        var coalesced = {};
+
+        // Coalesce scores into higher zooms, e.g.
+        // z5 inherits score of overlapping tiles at z4.
+        // @TODO assumes sources are in zoom ascending order.
         for (var i = 0; i < rows.length; i++) {
-            var row = rows[i];
-            features[row.tmpid] = row;
-            features[row.db + '.' + row.id] = row;
+            var f = rows[i];
+            var z = Math.floor(f.zxy[0]/1e14);
+            for (var c = 0; c < f.zxy.length; c++) {
+                var zxy = f.zxy[c];
+                if (coalesced[zxy]) {
+                    coalesced[zxy].push(f);
+                } else {
+                    coalesced[zxy] = [f];
+                }
+                var a = 0;
+                var x = Math.floor((zxy % 1e14) / 1e7);
+                var y = zxy % 1e7;
+                while (zooms[a] < z) {
+                    var p = zooms[a];
+                    var s = 1 << (z-p);
+                    var pxy = (p * 1e14) + (Math.floor(x/s) * 1e7) + Math.floor(y/s);
+                    if (coalesced[pxy]) coalesced[zxy] = coalesced[zxy].concat(coalesced[pxy]);
+                    a++;
+                }
+            }
         }
 
-        var results = _(rows).chain()
-            // Coalesce scores into higher zooms, e.g.
-            // z5 inherits score of overlapping tiles at z4.
-            // @TODO assumes sources are in zoom ascending order.
-            .reduce(function(memo, row) {
-                var sourcezoom = row.zxy[0]/1e14|0;
-                for (var a = 0; zooms[a] <= sourcezoom; a++) {
-                    var z = zooms[a];
-                    var f = features[row.tmpid];
-                    for (var c = 0; c < row.zxy.length; c++) {
-                        var zxy = row.zxy[c];
-                        memo[zxy] = memo[zxy] || [];
-                        if (memo[zxy].indexOf(f) === -1) memo[zxy].push(f);
-
-                        var pxy = pyramid(zxy, z);
-                        if (!memo[pxy]) continue;
-                        for (var d = 0; d < memo[pxy].length; d++) {
-                            if (memo[zxy].indexOf(memo[pxy][d]) >= 0) continue;
-                            memo[zxy].push(memo[pxy][d]);
-                        }
-                    }
-                }
-                return memo;
-            }, {})
+        var results = _(coalesced).chain()
             .reduce(function(memo, rows) {
                 // Sort by db, score such that total score can be
                 // calculated without results for the same db being summed.
@@ -290,7 +279,13 @@ Carmen.prototype.geocode = function(query, callback) {
                     return 0;
                 });
                 var score = Carmen.usagescore(data.query, rows);
+
+                // A threshold here reduces results early.
+                // @TODO tune this.
+                if (score < 0.75) return memo;
+
                 for (var i = 0, l = rows.length; i < l; i++) {
+                    features[rows[i].db + '.' + rows[i].id] = rows[i];
                     memo[rows[i].tmpid] = memo[rows[i].tmpid] || {
                         db: rows[i].db,
                         id: rows[i].id,
