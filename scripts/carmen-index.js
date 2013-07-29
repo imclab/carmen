@@ -10,9 +10,10 @@ var api = {
 var Carmen = require('../index.js');
 var Queue = require('../queue');
 var f = argv[2];
+var t = argv[3];
 
 if (!f) {
-    console.warn('Usage: carmen-index.js <file>');
+    console.warn('Usage: carmen-index.js <from> [to]');
     process.exit(1);
 }
 if (!fs.existsSync(f)) {
@@ -23,6 +24,10 @@ if (!api[path.extname(f)]) {
     console.warn('File %s format not recognized.', f);
     process.exit(1);
 }
+if (t && !api[path.extname(t)]) {
+    console.warn('File %s format not recognized.', t);
+    process.exit(1);
+}
 
 var nogrids = ('NOGRIDS' in process.env);
 if (nogrids) console.log('Indexing without grids.');
@@ -30,11 +35,12 @@ if (nogrids) console.log('Indexing without grids.');
 console.log('Indexing %s ...', f);
 
 var from = new api[path.extname(f)](f, function() {});
-var carmen = new Carmen({ from: from });
+var to = t ? new api[path.extname(t)](t, function() {}) : from;
+var carmen = new Carmen({ from: from, to: to });
 
 carmen._open(function(err) {
     if (err) throw err;
-    from.startWriting(function(err) {
+    to.startWriting(function(err) {
         if (err) throw err;
         var index = function(pointer) {
             from.indexable(pointer, function(err, docs, pointer) {
@@ -42,10 +48,10 @@ carmen._open(function(err) {
                 if (!docs.length) {
                     var start = +new Date;
                     console.log('Storing docs...');
-                    return carmen.store(from, function(err) {
+                    return carmen.store(to, function(err) {
                         console.log('Stored in %ss', Math.floor((+new Date-start) * 0.001));
                         if (err) throw err;
-                        from.stopWriting(function(err) {
+                        to.stopWriting(function(err) {
                             if (err) throw err;
                             console.log('Done.');
                             process.exit(0);
@@ -53,7 +59,7 @@ carmen._open(function(err) {
                     });
                 }
                 var start = +new Date;
-                carmen.index(from, docs, function(err) {
+                carmen.index(to, docs, function(err) {
                     if (err) throw err;
                     console.log('Indexed %s docs @ %s/s', docs.length, Math.floor(docs.length * 1000 / (+new Date - start)));
                     index(pointer);
@@ -63,4 +69,3 @@ carmen._open(function(err) {
         index({nogrids:nogrids});
     });
 });
-
