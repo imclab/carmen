@@ -32,14 +32,14 @@ MBTiles.prototype.putFeature = function(id, data, callback) {
 
 // Implements carmen#getCarmen method.
 MBTiles.prototype.getCarmen = function(type, shard, callback) {
-    return this._db.get('SELECT data FROM carmen_' + type + ' WHERE shard = ?', shard, function(err, row) {
+    return this._db.get('SELECT data FROM carmen2 WHERE type = ? AND shard = ?', type, shard, function(err, row) {
         callback(err, row ? row.data : null);
     });
 };
 
 // Implements carmen#putCarmen method.
 MBTiles.prototype.putCarmen = function(type, shard, data, callback) {
-    this.write('carmen_' + type, shard, { shard: shard, data: data }, callback);
+    this.write('carmen2', type + '.' + shard, { type:type, shard: shard, data: data }, callback);
 };
 
 // Implements carmen#indexable method.
@@ -110,10 +110,9 @@ MBTiles.prototype.startWriting = _(MBTiles.prototype.startWriting).wrap(function
         if (err) return callback(err);
         var sql = '\
         CREATE INDEX IF NOT EXISTS map_grid_id ON map (grid_id);\
-        CREATE TABLE IF NOT EXISTS carmen_docs(shard INTEGER PRIMARY KEY, data BLOB);\
-        CREATE TABLE IF NOT EXISTS carmen_freq(shard INTEGER PRIMARY KEY, data BLOB);\
-        CREATE TABLE IF NOT EXISTS carmen_term(shard INTEGER PRIMARY KEY, data BLOB);\
-        CREATE TABLE IF NOT EXISTS carmen_phrase(shard INTEGER PRIMARY KEY, data BLOB);';
+        CREATE TABLE IF NOT EXISTS carmen2(type TEXT, shard INTEGER, data BLOB);\
+        CREATE INDEX IF NOT EXISTS carmen2type ON carmen2 (type);\
+        CREATE INDEX IF NOT EXISTS carmen2shard ON carmen2 (type, shard);';
         this._db.exec(sql, function(err) {
             if (err) {
                 return callback(err);
