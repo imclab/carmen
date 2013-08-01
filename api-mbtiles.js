@@ -113,7 +113,7 @@ MBTiles.prototype.startWriting = _(MBTiles.prototype.startWriting).wrap(function
         CREATE TABLE IF NOT EXISTS carmen_docs(shard INTEGER PRIMARY KEY, data BLOB);\
         CREATE TABLE IF NOT EXISTS carmen_freq(shard INTEGER PRIMARY KEY, data BLOB);\
         CREATE TABLE IF NOT EXISTS carmen_term(shard INTEGER PRIMARY KEY, data BLOB);\
-        CREATE TABLE IF NOT EXISTS carmen_grid(shard INTEGER PRIMARY KEY, data BLOB);';
+        CREATE TABLE IF NOT EXISTS carmen_phrase(shard INTEGER PRIMARY KEY, data BLOB);';
         this._db.exec(sql, function(err) {
             if (err) {
                 return callback(err);
