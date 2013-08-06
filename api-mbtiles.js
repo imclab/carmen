@@ -15,7 +15,7 @@ function MBTiles(uri, callback) {
 
 // Implements carmen#getFeature method.
 MBTiles.prototype.getFeature = function(id, callback) {
-    this._db.get('SELECT key_name AS id, key_json AS data FROM keymap WHERE key_name = ?', id, function(err, row) {
+    this._db.get('SELECT key_name AS id, key_json AS data FROM keymap WHERE key_name = ?', id.toFixed(0), function(err, row) {
         if (err) return callback(err);
         try { return callback(null, JSON.parse(row.data)); }
         catch(err) { return callback(err); }
@@ -25,7 +25,7 @@ MBTiles.prototype.getFeature = function(id, callback) {
 // Implements carmen#putFeature method.
 MBTiles.prototype.putFeature = function(id, data, callback) {
     this.write('keymap', id, {
-        key_name: id,
+        key_name: id.toFixed(0),
         key_json: JSON.stringify(data)
     }, callback);
 };
