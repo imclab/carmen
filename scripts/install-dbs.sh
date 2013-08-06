@@ -7,7 +7,7 @@ if [ ! -d "$TILE_DIR" ]; then
     mkdir "$TILE_DIR"
 fi
 
-TILES="mb-places ne-countries ne-provinces tiger-zipcodes osm-streets-dc"
+TILES="mb-places ne-countries ne-provinces tiger-zipcodes"
 
 for NAME in $TILES; do
   if [ ! -f "$TILE_DIR/$NAME.mbtiles" ]; then

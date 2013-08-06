@@ -42,7 +42,7 @@ carmen._open(function(err) {
         count:0,
         maxes:[]
     };
-    stats.phrase = {
+    stats.grid = {
         min:Infinity,
         max:0,
         mean:0,
@@ -53,17 +53,15 @@ carmen._open(function(err) {
     function termlookup(maxes, i, callback) {
         if (i >= maxes.length) return callback();
         var term = maxes[i][0];
-        var phrase = maxes[i][2];
-        var shard = Carmen.shard(shardlevel, phrase);
-        Carmen.get(s, 'phrase', shard, function(err, data) {
+        var grid = maxes[i][2];
+        var shard = Carmen.shard(shardlevel, grid);
+        Carmen.get(s, 'grid', shard, function(err, data) {
             if (err) return callback(err);
-            if (!data[phrase]) return callback(new Error('Phrase ' + phrase + ' not found'));
-            var docid = data[phrase].docs[0];
-            var shard = Carmen.shard(shardlevel, docid);
-            Carmen.get(s, 'docs', shard, function(err, data) {
+            if (!data[grid]) return callback(new Error('Grid ' + grid + ' not found'));
+            var id = Carmen.intload([], data[grid][0])[0];
+            s.getFeature(id, function(err, doc) {
                 if (err) return callback(err);
-                if (!data[docid]) return callback(new Error('Doc ' + docid + ' not found'));
-                var text = data[docid].doc.search || data[docid].doc.name || '';
+                var text = doc.search || doc.name || '';
                 var query = Carmen.tokenize(text);
                 var terms = Carmen.terms(text);
                 var idx = terms.indexOf(+term);
@@ -79,20 +77,22 @@ carmen._open(function(err) {
 
     function phraselookup(maxes, i, callback) {
         if (i >= maxes.length) return callback();
-        var phrase = maxes[i][0];
-        var docid = maxes[i][2];
-        var shard = Carmen.shard(shardlevel, docid);
-        Carmen.get(s, 'docs', shard, function(err, data) {
+        var grid = maxes[i][0];
+        var shard = Carmen.shard(shardlevel, grid);
+        Carmen.get(s, 'grid', shard, function(err, data) {
             if (err) return callback(err);
-            if (!data[docid]) return callback(new Error('Doc ' + docid + ' not found'));
-            var text = data[docid].doc.search || data[docid].doc.name || '';
-            _(text.split(',')).each(function(syn) {
-                if (Carmen.phrase(syn) === +phrase) {
-                    maxes[i].unshift(Carmen.tokenize(syn).join(' '));
-                }
+            if (!data[grid]) return callback(new Error('Grid ' + grid + ' not found'));
+            var id = Carmen.intload([], data[grid][0])[0];
+            s.getFeature(id, function(err, doc) {
+                if (err) return callback(err);
+                var text = doc.search || doc.name || '';
+                _(text.split(',')).each(function(syn) {
+                    if (Carmen.phrase(syn) === +grid) {
+                        maxes[i].unshift(Carmen.tokenize(syn).join(' '));
+                    }
+                });
+                phraselookup(maxes, ++i, callback);
             });
-            if (maxes[i].length === 3) maxes[i].unshift(text);
-            phraselookup(maxes, ++i, callback);
         });
     };
 
@@ -122,7 +122,9 @@ carmen._open(function(err) {
         Carmen.get(s, type, i, function(err, data) {
             if (err) return callback(err);
             for (var id in data) {
-                list = type === 'term' ? data[id] : data[id].docs;
+                list = type === 'term'
+                    ? Carmen.intload([], data[id])
+                    : data[id].map(function(intstring) { return Carmen.intload([], intstring) });
                 rels = list.length;
 
                 // Verify that relations are unique.
@@ -143,7 +145,7 @@ carmen._open(function(err) {
 
     relstats('term', 0, function(err) {
         if (err) throw err;
-        relstats('phrase', 0, function(err) {
+        relstats('grid', 0, function(err) {
             if (err) throw err;
             console.log('term <=> phrase index');
             console.log('---------------------');
@@ -160,9 +162,9 @@ carmen._open(function(err) {
 
             console.log('');
 
-            console.log('phrase <=> doc index');
+            console.log('phrase <=> grid index');
             console.log('--------------------');
-            _(stats.phrase).each(function(val, key) {
+            _(stats.grid).each(function(val, key) {
                 if (key === 'maxes') {
                     console.log('- %s:', key);
                     _(val).each(function(entry, i) {
