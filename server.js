@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 
+var dirname = process.env.CARMEN_DIR || (__dirname + '/../tiles');
+
 var express = require('express');
 var server = express.createServer();
 var MBTiles = require('./api-mbtiles');
 var Carmen = require('./index.js');
-
-var carmen = new Carmen({
-    country: new MBTiles(__dirname + '/tiles/ne-countries.mbtiles', function(){}),
-    province: new MBTiles(__dirname + '/tiles/ne-provinces.mbtiles', function(){}),
-    zipcode: new MBTiles(__dirname + '/tiles/tiger-zipcodes.mbtiles', function(){}),
-    place: new MBTiles(__dirname + '/tiles/mb-places.mbtiles', function(){}),
-    street: new MBTiles(__dirname + '/tiles/osm-streets-dc.mbtiles', function(){})
-});
+var path = require('path');
+var opts = Carmen.autoSync(path.resolve(dirname));
+var carmen = new Carmen(opts);
 
 server.get('/geocode/:query', function(req, res, next) {
     if (!req.param('query')) return res.send(404);

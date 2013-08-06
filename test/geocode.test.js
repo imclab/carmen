@@ -16,10 +16,10 @@ if (backend !== 'mbtiles' && backend !== 's3') {
 }
 
 if (backend === 'mbtiles') var carmen = new Carmen({
-    country: new MBTiles(__dirname + '/../tiles/ne-countries.mbtiles', function(){}),
-    province: new MBTiles(__dirname + '/../tiles/ne-provinces.mbtiles', function(){}),
-    zipcode: new MBTiles(__dirname + '/../tiles/tiger-zipcodes.mbtiles', function(){}),
-    place: new MBTiles(__dirname + '/../tiles/mb-places.mbtiles', function(){})
+    country: new MBTiles(__dirname + '/../tiles/01-ne.country.mbtiles', function(){}),
+    province: new MBTiles(__dirname + '/../tiles/02-ne.province.mbtiles', function(){}),
+    zipcode: new MBTiles(__dirname + '/../tiles/03-tiger.zipcode.mbtiles', function(){}),
+    place: new MBTiles(__dirname + '/../tiles/04-mb.place.mbtiles', function(){})
 });
 
 function okay(type, a, b, margin) {

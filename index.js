@@ -1,4 +1,5 @@
 var _ = require('underscore');
+var fs = require('fs');
 var path = require('path');
 var basepath = path.resolve(__dirname + '/tiles');
 var sm = new (require('sphericalmercator'))();
@@ -230,7 +231,7 @@ Carmen.prototype.geocode = function(query, callback) {
         var result = [];
         var remaining = types.length;
         types.forEach(function(dbname, pos) {
-            carmen.search(indexes[dbname], data.query.join(' '), null, function(err, rows) {
+            carmen.search(indexes[dbname], data.query.join(' '), null, function(err, rows, stats) {
                 if (err) {
                     remaining = 0;
                     return callback(err);
@@ -244,6 +245,7 @@ Carmen.prototype.geocode = function(query, callback) {
                     }
                 }
                 result[pos] = rows;
+                if (DEBUG) data.stats['search.' + dbname] = stats;
                 if (!--remaining) {
                     zooms = zooms.sort(function(a,b) { return a < b ? -1 : 1 });
                     result = result.concat.apply([], result);
@@ -333,6 +335,9 @@ Carmen.prototype.geocode = function(query, callback) {
         data.stats.scoreCount = results.length;
 
         if (!results.length) return callback(null, results);
+
+        // Disallow more than 50 of the best results at this point.
+        if (results.length > 50) results = results.slice(0,50);
 
         var start = +new Date;
         var matches = [];
@@ -430,12 +435,13 @@ Carmen.usagescore = function(query, scored) {
     var query = query.slice(0);
 
     var score = 0;
-    var usage = 0;
+    var total = query.length;
     var lastdb = false;
 
     for (var i = 0; i < scored.length; i++) {
         if (lastdb === scored[i].db) continue;
 
+        var usage = 0;
         var hasreason = true;
         var reason = scored[i].reason;
         for (var j = 0; j < query.length; j++) {
@@ -445,11 +451,11 @@ Carmen.usagescore = function(query, scored) {
             }
         }
         if (hasreason) {
-            score += scored[i].score;
+            score += scored[i].score * (usage/total);
             lastdb = scored[i].db;
         }
     }
-    return score * Math.pow(usage / query.length, 2);
+    return score;
 };
 
 // Search a carmen source for features matching query.
@@ -464,19 +470,37 @@ Carmen.prototype.search = function(source, query, id, callback) {
     var terms = Carmen.terms(query);
     var freqs = source._carmen.logs;
     var scores = {};
+    var stats = {
+        phraseCount:0,
+        phraseShard:0,
+        phraseTimer:0,
+        termCount:0,
+        termShard:0,
+        termTimer:0,
+        scoredCount:0,
+        scoredTimer:0,
+        gridCount:0,
+        gridShard:0,
+        gridTimer:0
+    };
 
     var getphrases = function(queue, result, callback) {
         if (!queue.length) {
             result.sort(Carmen.shardsort(shardlevel));
             result = _(result).uniq(true);
+            stats.phraseTimer = stats.phraseTimer && (+new Date - stats.phraseTimer);
+            stats.phraseCount = result.length;
             return callback(null, result);
+        } else if (!result.length) {
+            stats.phraseTimer = +new Date;
         }
+        stats.phraseShard++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'term', shard, function(err, data) {
             if (err) return callback(err);
             while (shard === Carmen.shard(shardlevel, queue[0])) {
                 var id = queue.shift();
-                if (data[id]) Carmen.intload(result, data[id]); // result.push.apply(result, data[id]);
+                if (data[id]) Carmen.intload(result, data[id]);
             }
             if (!approxdocs) {
                 approxdocs = Object.keys(data).length * Math.pow(16, shardlevel);
@@ -490,8 +514,13 @@ Carmen.prototype.search = function(source, query, id, callback) {
         if (!queue.length) {
             result.sort(Carmen.shardsort(shardlevel));
             result = _(result).uniq(true);
+            stats.termTimer = stats.termTimer && (+new Date - stats.termTimer);
+            stats.termCount = result.length;
             return callback(null, result);
+        } else if (!result.length) {
+            stats.termTimer = +new Date;
         }
+        stats.termShard++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'phrase', shard, function(err, data) {
             if (err) return callback(err);
@@ -519,7 +548,8 @@ Carmen.prototype.search = function(source, query, id, callback) {
         });
     };
 
-    var getdocs = function(phrases, callback) {
+    var getscored = function(phrases, callback) {
+        stats.scoredTimer = +new Date;
         var result = [];
         for (var a = 0; a < phrases.length; a++) {
             var id = phrases[a];
@@ -537,6 +567,7 @@ Carmen.prototype.search = function(source, query, id, callback) {
             var term = 0;
             var score = 0;
             var total = 0;
+            var count = 0;
             var reason = 0;
             var termpos = -1;
             var lastpos = -1;
@@ -559,25 +590,38 @@ Carmen.prototype.search = function(source, query, id, callback) {
                 } else if (score === 0 || termpos === lastpos + 1) {
                     score += freqs[term]/total;
                     reason += 1 << i;
+                    count++;
                     lastpos = termpos;
                 }
             }
-            if (score > 0.8) {
+            if (score > 0.6) {
                 result.push(id);
+                score = score > 0.99 ? 1 : score;
                 scores[id] = {
-                    score: score > 0.99 ? 1 : score,
-                    reason: reason
+                    score: score,
+                    reason: reason,
+                    // encode score, reason count together
+                    tmpscore: score * 1e6 + count
                 };
             }
         }
         result.sort(Carmen.shardsort(shardlevel));
-        return _(result).uniq(true);
+        result = _(result).uniq(true);
+        stats.scoredTimer = +new Date - stats.scoredTimer;
+        stats.scoredCount = result.length;
+        return result;
     };
 
     var docscore = {};
     var getgrids = function(queue, result, callback) {
-        if (!queue.length) return callback(null, result);
-
+        if (!queue.length) {
+            stats.gridTimer = stats.gridTimer && (+new Date - stats.gridTimer);
+            stats.gridCount = result.length;
+            return callback(null, result);
+        } else if (!result.length) {
+            stats.gridTimer = +new Date;
+        }
+        stats.gridShard++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'grid', shard, function(err, data) {
             if (err) return callback(err);
@@ -587,9 +631,9 @@ Carmen.prototype.search = function(source, query, id, callback) {
                 var score = scores[id];
                 if (grids) for (var i = 0; i < grids.length; i++) {
                     var grid = Carmen.intload([], grids[i]);
-                    if (!docscore[grid[0]] || docscore[grid[0]] < score.score) {
+                    if (!docscore[grid[0]] || docscore[grid[0]] < score.tmpscore) {
                         result.push(new Scored(grid[0], grid.slice(1), score.score, score.reason));
-                        docscore[grid[0]] = score.score;
+                        docscore[grid[0]] = score.tmpscore;
                     }
                 }
             }
@@ -605,10 +649,10 @@ Carmen.prototype.search = function(source, query, id, callback) {
             if (err) return callback(err);
             getfreqs(terms, function(err) {
                 if (err) return callback(err);
-                var docs = getdocs(phrases);
-                getgrids(docs, [], function(err, scored) {
+                var scored = getscored(phrases);
+                getgrids(scored, [], function(err, result) {
                     if (err) return callback(err);
-                    return callback(null, scored);
+                    return callback(null, result, stats);
                 });
             });
         });
@@ -938,6 +982,36 @@ Carmen.put = function(source, type, shard, data, callback) {
         shards[shard] = data;
         callback(null);
     });
+};
+
+// Generate a Carmen options hash automatically reading sources in a directory.
+Carmen.autoSync = function(dirname) {
+    var S3;
+    var MBTiles;
+    var dir = path.resolve(dirname);
+    var files = fs.readdirSync(dir).map(function(f) { return {
+        pathname: dir + '/' + f,
+        extname: path.extname(f),
+        prefix: f.split('.')[0],
+        dbname: f.split('.')[1] || f.split('.')[0]
+    }});
+    files.sort(function(a, b) {
+        return a.prefix < b.prefix ? -1 : a.prefix > b.prefix ? 1 : 0
+    });
+    return files.reduce(function(opts, f) {
+        switch (f.extname) {
+        case '.mbtiles':
+            MBTiles = MBTiles || Carmen.MBTiles();
+            opts[f.dbname] = opts[f.dbname] || new MBTiles(f.pathname, function(){});
+            break;
+        case '.s3':
+            S3 = S3 || Carmen.S3();
+            opts[f.dbname] = opts[f.dbname] || new MBTiles(f.pathname, function(){});
+            break;
+        }
+        return opts;
+    }, {});
+
 };
 
 // Locking event emitter for consolidating I/O for identical requests.
