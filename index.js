@@ -288,48 +288,53 @@ Carmen.prototype.geocode = function(query, callback) {
             }
         }
 
-        var results = _(coalesced).chain()
-            .reduce(function(memo, rows) {
-                // Sort by db, score such that total score can be
-                // calculated without results for the same db being summed.
-                rows.sort(function(a, b) {
-                    var ai = types.indexOf(a.db);
-                    var bi = types.indexOf(b.db);
-                    if (ai < bi) return -1;
-                    if (ai > bi) return 1;
-                    if (a.score > b.score) return -1;
-                    if (a.score < b.score) return 1;
-                    if (a.reason > b.reason) return -1;
-                    if (a.reason < b.reason) return 1;
-                    return 0;
-                });
-                var score = Carmen.usagescore(data.query, rows);
+        var results = _(coalesced).chain().reduce(function(memo, rows) {
+            // Sort by db, score such that total score can be
+            // calculated without results for the same db being summed.
+            rows.sort(function(a, b) {
+                var ai = types.indexOf(a.db);
+                var bi = types.indexOf(b.db);
+                if (ai < bi) return -1;
+                if (ai > bi) return 1;
+                if (a.score > b.score) return -1;
+                if (a.score < b.score) return 1;
+                if (a.reason > b.reason) return -1;
+                if (a.reason < b.reason) return 1;
+                if (a.id < b.id) return -1;
+                if (a.id > b.id) return 1;
+                return 0;
+            });
+            var score = Carmen.usagescore(data.query, rows);
 
-                // A threshold here reduces results early.
-                // @TODO tune this.
-                if (score < 0.75) return memo;
+            // A threshold here reduces results early.
+            // @TODO tune this.
+            if (score < 0.75) return memo;
 
-                for (var i = 0, l = rows.length; i < l; i++) {
-                    var fullid = rows[i].db + '.' + rows[i].id;
-                    scored[fullid] = scored[fullid] || rows[i];
-                    memo[rows[i].tmpid] = memo[rows[i].tmpid] || {
-                        db: rows[i].db,
-                        id: rows[i].id,
-                        tmpid: rows[i].tmpid,
-                        score: score
-                    };
-                }
-                return memo;
-            }, {})
-            .sortBy(function(feature) { return -1 * feature.score })
-            .reduce(function(memo, feature) {
-                if (!memo.length || memo[0].score - feature.score < 0.5) {
-                    memo.push(feature);
-                }
-                return memo;
-            }, [])
-            .map(function(f) { return f.db + '.' + f.id; })
-            .value();
+            for (var i = 0, l = rows.length; i < l; i++) {
+                var fullid = rows[i].db + '.' + rows[i].id;
+                scored[fullid] = scored[fullid] || rows[i];
+                memo[rows[i].tmpid] = memo[rows[i].tmpid] || {
+                    db: rows[i].db,
+                    id: rows[i].id,
+                    tmpid: rows[i].tmpid,
+                    score: score
+                };
+            }
+            return memo;
+        }, {}).toArray().value();
+        results.sort(function(a, b) {
+            return a.score > b.score ? -1 :
+                a.score < b.score ? 1 :
+                a.tmpid < b.tmpid ? -1 :
+                a.tmpid > b.tmpid ? 1 : 0;
+        });
+        results = results.reduce(function(memo, feature) {
+            if (!memo.length || memo[0].score - feature.score < 0.5) {
+                memo.push(feature);
+            }
+            return memo;
+        }, []);
+        results = results.map(function(f) { return f.db + '.' + f.id; });
 
         data.stats.scoreTime = +new Date - data.stats.scoreTime;
         data.stats.scoreCount = results.length;
@@ -442,15 +447,14 @@ Carmen.usagescore = function(query, scored) {
         if (lastdb === scored[i].db) continue;
 
         var usage = 0;
-        var hasreason = true;
         var reason = scored[i].reason;
         for (var j = 0; j < query.length; j++) {
-            if (1<<j & reason) {
-                hasreason = hasreason && query[j] && ++usage;
+            if ((1<<j & reason) && query[j]) {
+                ++usage;
                 query[j] = false;
             }
         }
-        if (hasreason) {
+        if (usage) {
             score += scored[i].score * (usage/total);
             lastdb = scored[i].db;
         }
@@ -471,30 +475,23 @@ Carmen.prototype.search = function(source, query, id, callback) {
     var freqs = source._carmen.logs;
     var scores = {};
     var stats = {
-        phraseCount:0,
-        phraseShard:0,
-        phraseTimer:0,
-        termCount:0,
-        termShard:0,
-        termTimer:0,
-        scoredCount:0,
-        scoredTimer:0,
-        gridCount:0,
-        gridShard:0,
-        gridTimer:0
+        phrase:[0,0,0],
+        term:[0,0,0],
+        scored:[0,0,0],
+        grid:[0,0,0]
     };
 
     var getphrases = function(queue, result, callback) {
         if (!queue.length) {
             result.sort(Carmen.shardsort(shardlevel));
             result = _(result).uniq(true);
-            stats.phraseTimer = stats.phraseTimer && (+new Date - stats.phraseTimer);
-            stats.phraseCount = result.length;
+            stats.phrase[2] = stats.phrase[2] && (+new Date - stats.phrase[2]);
+            stats.phrase[1] = result.length;
             return callback(null, result);
         } else if (!result.length) {
-            stats.phraseTimer = +new Date;
+            stats.phrase[2] = +new Date;
         }
-        stats.phraseShard++;
+        stats.phrase[0]++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'term', shard, function(err, data) {
             if (err) return callback(err);
@@ -514,13 +511,13 @@ Carmen.prototype.search = function(source, query, id, callback) {
         if (!queue.length) {
             result.sort(Carmen.shardsort(shardlevel));
             result = _(result).uniq(true);
-            stats.termTimer = stats.termTimer && (+new Date - stats.termTimer);
-            stats.termCount = result.length;
+            stats.term[2] = stats.term[2] && (+new Date - stats.term[2]);
+            stats.term[1] = result.length;
             return callback(null, result);
         } else if (!result.length) {
-            stats.termTimer = +new Date;
+            stats.term[2] = +new Date;
         }
-        stats.termShard++;
+        stats.term[0]++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'phrase', shard, function(err, data) {
             if (err) return callback(err);
@@ -549,7 +546,7 @@ Carmen.prototype.search = function(source, query, id, callback) {
     };
 
     var getscored = function(phrases, callback) {
-        stats.scoredTimer = +new Date;
+        stats.scored[2] = +new Date;
         var result = [];
         for (var a = 0; a < phrases.length; a++) {
             var id = phrases[a];
@@ -607,21 +604,21 @@ Carmen.prototype.search = function(source, query, id, callback) {
         }
         result.sort(Carmen.shardsort(shardlevel));
         result = _(result).uniq(true);
-        stats.scoredTimer = +new Date - stats.scoredTimer;
-        stats.scoredCount = result.length;
+        stats.scored[2] = +new Date - stats.scored[2];
+        stats.scored[1] = result.length;
         return result;
     };
 
     var docscore = {};
     var getgrids = function(queue, result, callback) {
         if (!queue.length) {
-            stats.gridTimer = stats.gridTimer && (+new Date - stats.gridTimer);
-            stats.gridCount = result.length;
+            stats.grid[2] = stats.grid[2] && (+new Date - stats.grid[2]);
+            stats.grid[1] = result.length;
             return callback(null, result);
         } else if (!result.length) {
-            stats.gridTimer = +new Date;
+            stats.grid[2] = +new Date;
         }
-        stats.gridShard++;
+        stats.grid[0]++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'grid', shard, function(err, data) {
             if (err) return callback(err);

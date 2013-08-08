@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-var dirname = process.env.CARMEN_DIR || (__dirname + '/../tiles');
+var dirname = process.env.CARMEN_DIR || (__dirname + '/tiles');
 
 var express = require('express');
 var server = express.createServer();
