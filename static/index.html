@@ -116,10 +116,12 @@ var marker = L.marker([38.8934, -77.0362], {
   icon: L.mapbox.marker.icon({
     'marker-size': 'large',
     'marker-symbol': 'star',
-    'marker-color': '#222222'
+    'marker-color': '#335566'
   })
 });
 marker.addTo(map);
+
+var poilayer = L.mapbox.markerLayer().addTo(map);
 
 var carmen = L.mapbox.geocoder({
   geocoder: '/geocode/{query}'
@@ -174,8 +176,10 @@ var message = function(data, timeout) {
 message('Start typing to search', 500);
 
 var geocoder = document.getElementById('geocoder');
-geocoder.onsubmit = function() {
-  carmen.query(search.value, function(err, data) {
+geocoder.onsubmit = function() { return geocode(search.value); };
+
+var geocode = function(query) {
+  carmen.query(query, function(err, data) {
     search.value = '';
     if (err) return console.error(err);
     if (!data) {
@@ -184,6 +188,7 @@ geocoder.onsubmit = function() {
     };
 
     var id = data.results[0][0].id;
+    var type = id.split('.')[0];
     var text = _(data.results).chain()
         .map(function(r) {
             var output = '<div class="item">';
@@ -205,18 +210,42 @@ geocoder.onsubmit = function() {
         .slice(0,5)
         .join('\n');
     message(text, 100);
-    switch (id.split('.')[0]) {
+    switch (type) {
         case 'country':
         case 'province':
         case 'zipcode':
         case 'place':
             data.lbounds ? map.fitBounds(data.lbounds) : map.panTo(data.latlng);
+            marker.setLatLng(data.latlng);
             break;
         case 'street':
-            map.setView(data.latlng, 18);
+            map.setView(data.latlng, 16);
+            marker.setLatLng(data.latlng);
+            break;
+        case 'poi':
+            var geojson = {
+                type:'FeatureCollection',
+                features: _(data.results).map(function(r) {
+                    return {
+                        type:'Feature',
+                        geometry:{
+                            type:'Point',
+                            coordinates:[r[0].lon, r[0].lat],
+                        },
+                        properties:{
+                            title:r[0].name,
+                            description:r[0].address || r[0].website,
+                            'marker-size':'small',
+                            'marker-symbol':r[0].maki,
+                            'marker-color':'#936'
+                        }
+                    }
+                })
+            };
+            poilayer.setGeoJSON(geojson);
+            map.fitBounds(poilayer.getBounds());
             break;
     }
-    marker.setLatLng(data.latlng);
   });
   return false;
 };

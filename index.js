@@ -251,19 +251,19 @@ Carmen.prototype.geocode = function(query, callback) {
                     result = result.concat.apply([], result);
                     data.stats.searchTime = +new Date - data.stats.searchTime;
                     data.stats.searchCount = result.length;
-                    data.stats.scoreTime = +new Date;
+                    data.stats.relevTime = +new Date;
                     callback(null, result, zooms);
                 }
             });
         });
     };
 
-    function score(rows, zooms, callback) {
-        var scored = {};
+    function relev(rows, zooms, callback) {
+        var relevd = {};
         var coalesced = {};
 
-        // Coalesce scores into higher zooms, e.g.
-        // z5 inherits score of overlapping tiles at z4.
+        // Coalesce relevs into higher zooms, e.g.
+        // z5 inherits relev of overlapping tiles at z4.
         // @TODO assumes sources are in zoom ascending order.
         for (var i = 0; i < rows.length; i++) {
             var f = rows[i];
@@ -288,51 +288,56 @@ Carmen.prototype.geocode = function(query, callback) {
             }
         }
 
-        var results = _(coalesced).chain()
-            .reduce(function(memo, rows) {
-                // Sort by db, score such that total score can be
-                // calculated without results for the same db being summed.
-                rows.sort(function(a, b) {
-                    var ai = types.indexOf(a.db);
-                    var bi = types.indexOf(b.db);
-                    if (ai < bi) return -1;
-                    if (ai > bi) return 1;
-                    if (a.score > b.score) return -1;
-                    if (a.score < b.score) return 1;
-                    if (a.reason > b.reason) return -1;
-                    if (a.reason < b.reason) return 1;
-                    return 0;
-                });
-                var score = Carmen.usagescore(data.query, rows);
+        var results = _(coalesced).chain().reduce(function(memo, rows) {
+            // Sort by db, relev such that total relev can be
+            // calculated without results for the same db being summed.
+            rows.sort(function(a, b) {
+                var ai = types.indexOf(a.db);
+                var bi = types.indexOf(b.db);
+                if (ai < bi) return -1;
+                if (ai > bi) return 1;
+                if (a.relev > b.relev) return -1;
+                if (a.relev < b.relev) return 1;
+                if (a.reason > b.reason) return -1;
+                if (a.reason < b.reason) return 1;
+                if (a.id < b.id) return -1;
+                if (a.id > b.id) return 1;
+                return 0;
+            });
+            var relev = Carmen.usagerelev(data.query, rows);
 
-                // A threshold here reduces results early.
-                // @TODO tune this.
-                if (score < 0.75) return memo;
+            // A threshold here reduces results early.
+            // @TODO tune this.
+            if (relev < 0.75) return memo;
 
-                for (var i = 0, l = rows.length; i < l; i++) {
-                    var fullid = rows[i].db + '.' + rows[i].id;
-                    scored[fullid] = scored[fullid] || rows[i];
-                    memo[rows[i].tmpid] = memo[rows[i].tmpid] || {
-                        db: rows[i].db,
-                        id: rows[i].id,
-                        tmpid: rows[i].tmpid,
-                        score: score
-                    };
-                }
-                return memo;
-            }, {})
-            .sortBy(function(feature) { return -1 * feature.score })
-            .reduce(function(memo, feature) {
-                if (!memo.length || memo[0].score - feature.score < 0.5) {
-                    memo.push(feature);
-                }
-                return memo;
-            }, [])
-            .map(function(f) { return f.db + '.' + f.id; })
-            .value();
+            for (var i = 0, l = rows.length; i < l; i++) {
+                var fullid = rows[i].db + '.' + rows[i].id;
+                relevd[fullid] = relevd[fullid] || rows[i];
+                memo[rows[i].tmpid] = memo[rows[i].tmpid] || {
+                    db: rows[i].db,
+                    id: rows[i].id,
+                    tmpid: rows[i].tmpid,
+                    relev: relev
+                };
+            }
+            return memo;
+        }, {}).toArray().value();
+        results.sort(function(a, b) {
+            return a.relev > b.relev ? -1 :
+                a.relev < b.relev ? 1 :
+                a.tmpid < b.tmpid ? -1 :
+                a.tmpid > b.tmpid ? 1 : 0;
+        });
+        results = results.reduce(function(memo, feature) {
+            if (!memo.length || memo[0].relev - feature.relev < 0.5) {
+                memo.push(feature);
+            }
+            return memo;
+        }, []);
+        results = results.map(function(f) { return f.db + '.' + f.id; });
 
-        data.stats.scoreTime = +new Date - data.stats.scoreTime;
-        data.stats.scoreCount = results.length;
+        data.stats.relevTime = +new Date - data.stats.relevTime;
+        data.stats.relevCount = results.length;
 
         if (!results.length) return callback(null, results);
 
@@ -354,7 +359,7 @@ Carmen.prototype.geocode = function(query, callback) {
                     if (!--remaining) {
                         data.stats.contextTime = +new Date - start;
                         data.stats.contextCount = contexts.length;
-                        return callback(null, contexts, scored);
+                        return callback(null, contexts, relevd);
                     }
                 });
             });
@@ -363,33 +368,33 @@ Carmen.prototype.geocode = function(query, callback) {
 
     search(function(err, rows, zooms) {
         if (err) return callback(err);
-        score(rows, zooms, function(err, contexts, scored) {
+        relev(rows, zooms, function(err, contexts, relevd) {
             if (err) return callback(err);
 
             // Confirm that the context contains the terms that contributed
-            // to the match's score. All other contexts are false positives
+            // to the match's relev. All other contexts are false positives
             // and should be discarded. Example:
             //
             //     "Chester, NJ" => "Chester, PA"
             //
             // This context will be returned because Chester, PA is in
             // close enough proximity to overlap with NJ.
-            var maxscore = 0;
+            var maxrelev = 0;
             var results = contexts.reduce(function(memo, c) {
                 var context = [];
                 for (var i = 0; i < c.length; i++) {
-                    if (scored[c[i].id]) {
-                        context.push(scored[c[i].id]);
-                        c[i].score = scored[c[i].id].score;
+                    if (relevd[c[i].id]) {
+                        context.push(relevd[c[i].id]);
+                        c[i].relev = relevd[c[i].id].relev;
                     }
                 }
-                var score = Carmen.usagescore(data.query, context);
-                if (!memo.length || score === maxscore) {
+                var relev = Carmen.usagerelev(data.query, context);
+                if (!memo.length || relev === maxrelev) {
                     memo.push(c);
-                    maxscore = score;
+                    maxrelev = relev;
                     return memo;
-                } else if (score > maxscore) {
-                    maxscore = score;
+                } else if (relev > maxrelev) {
+                    maxrelev = relev;
                     return [c];
                 } else {
                     return memo;
@@ -419,43 +424,42 @@ Carmen.prototype.geocode = function(query, callback) {
             });
             data.results = results;
 
-            data.stats.score = maxscore;
+            data.stats.relev = maxrelev;
             return callback(null, data);
         });
     });
 };
 
-// Return a "usage" score by comparing a set of scored elements against the
-// input query. Each scored element must include the following keys: score,
+// Return a "usage" relev by comparing a set of relevd elements against the
+// input query. Each relevd element must include the following keys: relev,
 // reason, db.
-Carmen.usagescore = function(query, scored) {
+Carmen.usagerelev = function(query, relevd) {
     // Clone original query tokens. These will be crossed off one
     // by one to ensure each query token only counts once towards
-    // the final score.
+    // the final relev.
     var query = query.slice(0);
 
-    var score = 0;
+    var relev = 0;
     var total = query.length;
     var lastdb = false;
 
-    for (var i = 0; i < scored.length; i++) {
-        if (lastdb === scored[i].db) continue;
+    for (var i = 0; i < relevd.length; i++) {
+        if (lastdb === relevd[i].db) continue;
 
         var usage = 0;
-        var hasreason = true;
-        var reason = scored[i].reason;
+        var reason = relevd[i].reason;
         for (var j = 0; j < query.length; j++) {
-            if (1<<j & reason) {
-                hasreason = hasreason && query[j] && ++usage;
+            if ((1<<j & reason) && query[j]) {
+                ++usage;
                 query[j] = false;
             }
         }
-        if (hasreason) {
-            score += scored[i].score * (usage/total);
-            lastdb = scored[i].db;
+        if (usage) {
+            relev += relevd[i].relev * (usage/total);
+            lastdb = relevd[i].db;
         }
     }
-    return score;
+    return relev;
 };
 
 // Search a carmen source for features matching query.
@@ -469,32 +473,25 @@ Carmen.prototype.search = function(source, query, id, callback) {
     var shardlevel = source._carmen.shardlevel;
     var terms = Carmen.terms(query);
     var freqs = source._carmen.logs;
-    var scores = {};
+    var relevs = {};
     var stats = {
-        phraseCount:0,
-        phraseShard:0,
-        phraseTimer:0,
-        termCount:0,
-        termShard:0,
-        termTimer:0,
-        scoredCount:0,
-        scoredTimer:0,
-        gridCount:0,
-        gridShard:0,
-        gridTimer:0
+        phrase:[0,0,0],
+        term:[0,0,0],
+        relevd:[0,0,0],
+        grid:[0,0,0]
     };
 
     var getphrases = function(queue, result, callback) {
         if (!queue.length) {
             result.sort(Carmen.shardsort(shardlevel));
             result = _(result).uniq(true);
-            stats.phraseTimer = stats.phraseTimer && (+new Date - stats.phraseTimer);
-            stats.phraseCount = result.length;
+            stats.phrase[2] = stats.phrase[2] && (+new Date - stats.phrase[2]);
+            stats.phrase[1] = result.length;
             return callback(null, result);
         } else if (!result.length) {
-            stats.phraseTimer = +new Date;
+            stats.phrase[2] = +new Date;
         }
-        stats.phraseShard++;
+        stats.phrase[0]++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'term', shard, function(err, data) {
             if (err) return callback(err);
@@ -514,13 +511,13 @@ Carmen.prototype.search = function(source, query, id, callback) {
         if (!queue.length) {
             result.sort(Carmen.shardsort(shardlevel));
             result = _(result).uniq(true);
-            stats.termTimer = stats.termTimer && (+new Date - stats.termTimer);
-            stats.termCount = result.length;
+            stats.term[2] = stats.term[2] && (+new Date - stats.term[2]);
+            stats.term[1] = result.length;
             return callback(null, result);
         } else if (!result.length) {
-            stats.termTimer = +new Date;
+            stats.term[2] = +new Date;
         }
-        stats.termShard++;
+        stats.term[0]++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'phrase', shard, function(err, data) {
             if (err) return callback(err);
@@ -548,8 +545,8 @@ Carmen.prototype.search = function(source, query, id, callback) {
         });
     };
 
-    var getscored = function(phrases, callback) {
-        stats.scoredTimer = +new Date;
+    var getrelevd = function(phrases, callback) {
+        stats.relevd[2] = +new Date;
         var result = [];
         for (var a = 0; a < phrases.length; a++) {
             var id = phrases[a];
@@ -558,14 +555,14 @@ Carmen.prototype.search = function(source, query, id, callback) {
             if (!data) throw new Error('Failed to get phrase');
             data = Carmen.intload([], data);
 
-            // Score each feature:
-            // - across all feature synonyms, find the max score of the sum
+            // relev each feature:
+            // - across all feature synonyms, find the max relev of the sum
             //   of each synonym's terms based on each term's frequency of
             //   occurrence in the dataset.
-            // - for the max score also store the 'reason' -- the index of
-            //   each query token that contributed to its score.
+            // - for the max relev also store the 'reason' -- the index of
+            //   each query token that contributed to its relev.
             var term = 0;
-            var score = 0;
+            var relev = 0;
             var total = 0;
             var count = 0;
             var reason = 0;
@@ -582,58 +579,58 @@ Carmen.prototype.search = function(source, query, id, callback) {
                 term = terms[i];
                 termpos = text.indexOf(term);
                 if (termpos === -1) {
-                    if (score !== 0) {
+                    if (relev !== 0) {
                         break;
                     } else {
                         continue;
                     }
-                } else if (score === 0 || termpos === lastpos + 1) {
-                    score += freqs[term]/total;
+                } else if (relev === 0 || termpos === lastpos + 1) {
+                    relev += freqs[term]/total;
                     reason += 1 << i;
                     count++;
                     lastpos = termpos;
                 }
             }
-            if (score > 0.6) {
+            if (relev > 0.6) {
                 result.push(id);
-                score = score > 0.99 ? 1 : score;
-                scores[id] = {
-                    score: score,
+                relev = relev > 0.99 ? 1 : relev;
+                relevs[id] = {
+                    relev: relev,
                     reason: reason,
-                    // encode score, reason count together
-                    tmpscore: score * 1e6 + count
+                    // encode relev, reason count together
+                    tmprelev: relev * 1e6 + count
                 };
             }
         }
         result.sort(Carmen.shardsort(shardlevel));
         result = _(result).uniq(true);
-        stats.scoredTimer = +new Date - stats.scoredTimer;
-        stats.scoredCount = result.length;
+        stats.relevd[2] = +new Date - stats.relevd[2];
+        stats.relevd[1] = result.length;
         return result;
     };
 
-    var docscore = {};
+    var docrelev = {};
     var getgrids = function(queue, result, callback) {
         if (!queue.length) {
-            stats.gridTimer = stats.gridTimer && (+new Date - stats.gridTimer);
-            stats.gridCount = result.length;
+            stats.grid[2] = stats.grid[2] && (+new Date - stats.grid[2]);
+            stats.grid[1] = result.length;
             return callback(null, result);
         } else if (!result.length) {
-            stats.gridTimer = +new Date;
+            stats.grid[2] = +new Date;
         }
-        stats.gridShard++;
+        stats.grid[0]++;
         var shard = Carmen.shard(shardlevel, queue[0]);
         Carmen.get(source, 'grid', shard, function(err, data) {
             if (err) return callback(err);
             while (shard === Carmen.shard(shardlevel, queue[0])) {
                 var id = queue.shift();
                 var grids = data[id];
-                var score = scores[id];
+                var relev = relevs[id];
                 if (grids) for (var i = 0; i < grids.length; i++) {
                     var grid = Carmen.intload([], grids[i]);
-                    if (!docscore[grid[0]] || docscore[grid[0]] < score.tmpscore) {
-                        result.push(new Scored(grid[0], grid.slice(1), score.score, score.reason));
-                        docscore[grid[0]] = score.tmpscore;
+                    if (!docrelev[grid[0]] || docrelev[grid[0]] < relev.tmprelev) {
+                        result.push(new Relev(grid[0], grid.slice(1), relev.relev, relev.reason));
+                        docrelev[grid[0]] = relev.tmprelev;
                     }
                 }
             }
@@ -649,8 +646,8 @@ Carmen.prototype.search = function(source, query, id, callback) {
             if (err) return callback(err);
             getfreqs(terms, function(err) {
                 if (err) return callback(err);
-                var scored = getscored(phrases);
-                getgrids(scored, [], function(err, result) {
+                var relevd = getrelevd(phrases);
+                getgrids(relevd, [], function(err, result) {
                     if (err) return callback(err);
                     return callback(null, result, stats);
                 });
@@ -1029,12 +1026,12 @@ Locking.prototype.loader = function(callback) {
     };
 };
 
-// Prototype for scored rows of Carmen.search.
+// Prototype for relevance relevd rows of Carmen.search.
 // Defined to take advantage of V8 class performance.
-function Scored(id, zxy, score, reason) {
+function Relev(id, zxy, relev, reason) {
     this.id = id;
     this.zxy = zxy;
-    this.score = score;
+    this.relev = relev;
     this.reason = reason;
 };
 

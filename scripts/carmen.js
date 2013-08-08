@@ -47,9 +47,23 @@ carmen.geocode(process.argv[2], function(err, data) {
         console.log('-----');
         console.log('- warmup:    %sms', load);
         console.log('- search:    %s @ %sms', data.stats.searchCount||0, data.stats.searchTime||0);
-        console.log('- score:     %s @ %sms', data.stats.scoreCount||0, data.stats.scoreTime||0);
+        console.log('- relev:     %s @ %sms', data.stats.relevCount||0, data.stats.relevTime||0);
         console.log('- results:   %s @ %sms', data.stats.contextCount||0, data.stats.contextTime||0);
-        console.log('- relevance: %s', data.stats.score);
+        console.log('- relevance: %s', data.stats.relev);
         console.log('- totaltime: %sms', time);
+        if (process.env.DEBUG) Object.keys(opts).forEach(function(dbname) {
+            var stats = data.stats['search.'+dbname];
+            if (!stats) return;
+            console.log('- search.%s', dbname);
+            for (var phase in stats) {
+                console.log('  - %s %s => %s @ %s ms', rpad(phase,8), stats[phase][0], stats[phase][1], stats[phase][2]);
+            }
+        });
     });
 });
+
+function rpad(str, len) {
+    if (typeof str !== 'string') str = str.toString();
+    while (str.length < len) str = str + ' ';
+    return str;
+};
