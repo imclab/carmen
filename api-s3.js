@@ -47,7 +47,11 @@ S3.terms = function(doc) {
 // Implements carmen#search method.
 S3.prototype.search = function(query, id, callback) {
     if (!this.data) return callback(new Error('Tilesource not loaded'));
-    if (!this.client) return callback(new Error('No S3 client found'));
+    if (!this.client) {
+        console.log("client missing."); //CDJ
+        console.trace();    //CDJ
+        return callback(new Error('No S3 client found'));
+    }
 
     // Parse carmen URL.
     try { var uri = url.parse(this.data._carmen); }
